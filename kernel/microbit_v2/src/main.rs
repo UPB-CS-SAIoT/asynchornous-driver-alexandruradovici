@@ -110,6 +110,16 @@ pub struct MicroBit {
     app_flash: &'static capsules::app_flash_driver::AppFlash<'static>,
     sound_pressure: &'static capsules::sound_pressure::SoundPressureSensor<'static>,
 
+    hello: &'static drivers::hello::Hello<
+        'static,                                                                        // 'a
+        capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52833::rtc::Rtc<'static>>, // A
+        capsules::led_matrix::LedMatrixLed<
+            'static,
+            nrf52::gpio::GPIOPin<'static>,
+            capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
+        >,
+    >,
+
     scheduler: &'static RoundRobinSched<'static>,
     systick: cortexm4::systick::SysTick,
 }
@@ -135,6 +145,7 @@ impl SyscallDriverLookup for MicroBit {
             capsules::app_flash_driver::DRIVER_NUM => f(Some(self.app_flash)),
             capsules::sound_pressure::DRIVER_NUM => f(Some(self.sound_pressure)),
             kernel::ipc::DRIVER_NUM => f(Some(&self.ipc)),
+            drivers::hello::DRIVER_NUM => f(Some(self.hello)),
             _ => f(None),
         }
     }
@@ -579,6 +590,37 @@ pub unsafe fn main() {
     let scheduler = components::sched::round_robin::RoundRobinComponent::new(&PROCESSES)
         .finalize(components::rr_component_helper!(NUM_PROCS));
 
+    let single_led = components::led_matrix_led!(
+        nrf52::gpio::GPIOPin<'static>,
+        capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
+        led,
+        0,
+        0
+    );
+
+    let virtual_alarm_hello = static_init!(
+        capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52833::rtc::Rtc>,
+        capsules::virtual_alarm::VirtualMuxAlarm::new(mux_alarm)
+    );
+
+    let hello = static_init!(
+        drivers::hello::Hello<
+            'static,                                                                        // 'a
+            capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52833::rtc::Rtc<'static>>, // A
+            capsules::led_matrix::LedMatrixLed<
+                'static,
+                nrf52::gpio::GPIOPin<'static>,
+                capsules::virtual_alarm::VirtualMuxAlarm<'static, nrf52::rtc::Rtc<'static>>,
+            >, //L
+        >,
+        drivers::hello::Hello::new(
+            virtual_alarm_hello,
+            board_kernel.create_grant(drivers::hello::DRIVER_NUM, &memory_allocation_capability),
+            single_led
+        )
+    );
+    virtual_alarm_hello.set_alarm_client(hello);
+
     let microbit = MicroBit {
         ble_radio,
         console,
@@ -602,6 +644,7 @@ pub unsafe fn main() {
 
         scheduler,
         systick: cortexm4::systick::SysTick::new_with_calibration(64000000),
+        hello,
     };
 
     let chip = static_init!(
